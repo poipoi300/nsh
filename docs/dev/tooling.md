@@ -82,7 +82,6 @@ Existing directories are never deleted automatically. Follow the CoC project con
 
 ## Output
 
-
 The CLI's terminal output is `crates/nsh-cli/src/ui.rs` (`website/docs/cli.md`, "Output", shows it): one line per
 step, the details only when something fails. Every command prints through it:
 
@@ -155,8 +154,7 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 - What the dev server serves to others (`crates/nsh-dev/src/server.rs`): `/assets/<path>` is the files a build
   imported and the UI sets' crates ship (`DevServer::serve_files`, by name, any type), and from the app's directory only
   media files (images, fonts, audio, video by extension) outside hidden directories, `.nsh`, `node_modules` and
-  `target`, also after following links (`asset_in_root`); sources, `nsh.json`, `.env`, JSON and other files return
-  404. `/ws` takes native hosts (no `Origin`) and the dev server's own web page: a browser's `Origin` must be
+  `target`, also after following links (`asset_in_root`); sources, `nsh.json`, `.env`, JSON and other files return 404. `/ws` takes native hosts (no `Origin`) and the dev server's own web page: a browser's `Origin` must be
   `http(s)://` plus the request's `Host`, an IP address or `localhost` (`allowed_origin`), so another page open in a
   browser, even on loopback or under a name rebound to this machine, gets 403.
 - Asset names: `asset:/<path>` is a file's path in the app's directory, the bundle's asset root
@@ -248,9 +246,9 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   - a navigator made at the top of a module keeps its routes, so a stack rendered again shows the same screens (the
     screens' contents render anew); a top-level signal keeps its value;
   - a changed `mount` call (another component, props) mounts the app again.
-  `crates/nsh-engine/tests/engine/hot.rs` covers each case. A component that throws reports the error and renders
-  nothing until the fix. A patch that throws shows the error and the next save recovers; a patch that cannot be applied (`false`)
-  makes the host reload. Verified on the iOS simulator, the Android emulator and Mac Catalyst.
+    `crates/nsh-engine/tests/engine/hot.rs` covers each case. A component that throws reports the error and renders
+    nothing until the fix. A patch that throws shows the error and the next save recovers; a patch that cannot be applied (`false`)
+    makes the host reload. Verified on the iOS simulator, the Android emulator and Mac Catalyst.
 - Stacks are symbolicated with source maps: bundling produces a hidden source map (the TSX→JSX→JS maps are composed with
   `rolldown_sourcemap::collapse_sourcemaps`), sent along with the bundle; the engine rewrites `bundle.js:L:C` to `App.tsx:L:C` before reporting.
 
@@ -290,7 +288,7 @@ The steps name views with selectors (`headless/selector.rs`, Playwright's manner
 `label:<accessibilityLabel>`, `text:<text>` (an input's text or, while it is empty, its placeholder too), `role:<role>`
 with an optional `[<name>]` (the label, else the texts inside), `view:<id>` or a bare string (testID, then label, then
 text); `label:`, `text:` and names take `/regex/flags` (Rust's `regex` syntax, flags `i`, `m`, `s`: a selector is
-a string the driver matches on its own thread, or a real host's agent on the device, away from any JS engine), ` >> `
+a string the driver matches on its own thread, or a real host's agent on the device, away from any JS engine), `>>`
 looks inside the previous part's matches, `nth=<n>`
 keeps one. A part starting with a lowercase word and a colon (`[a-z][a-z0-9-]*:`) that is no known prefix is a parse
 error, never a bare string, so adding a prefix cannot change what an existing selector matches; such a text is
@@ -431,10 +429,12 @@ Headless runs play the platform's part NSH's protocol defines, and refuse what o
 - dialogs (`Command::Dialog`) are answered with `onDialog` (`id`, `index`, -1 dismissed): by the test's handler, else
   `default_answer` (the cancel button, else dismissed when cancelable, else the step fails); `nsh/test`'s `App` answers
   them after each step itself (`answer_dialogs_myself`), so its JS handler runs on the test file's VM;
-- picks (`Command::PickImages`, `Command::PickFiles`) are answered with `onPick` (`EventPayload::Picked`): by the test's files
-  (`Headless::on_pick`, `app.onPick`; given as they are, nothing scaled), else cancelled (no files); `nsh/test`'s `App`
-  answers them after each step and its dialogs (`answer_picks_myself`), and `app.picks()` lists what was asked; a real
-  platform shows its own picker, which the driver does not answer;
+- picks (`Command::PickImages`, `Command::PickFiles`) can be answered by `Headless::on_pick` or `app.onPick`.
+  The headless driver sends `EventPayload::Picked` with the supplied files as-is and uses an empty list for cancellation.
+  For typed document picker failures, supply a `PickerBackend` in `EngineConfig::picker` or send
+  `EventPayload::FilesPicked` with a `FilePickResult` in an engine test. `nsh/test`'s `App` answers picks after
+  each step and its dialogs (`answer_picks_myself`), and `app.picks()` lists what was asked.
+  A real platform shows and answers its own picker;
 - speech sessions run on a fake recognizer (`headless/speech.rs`, unless the test's `EngineConfig::speech` is set): a
   session starts at once, `Headless::hear` (`app.hear(text)`) reports `text` as the transcript so far, `stop` and
   `Headless::end_speech` (`app.endSpeech(error?)`) end it with the last transcript as final (`no-speech` when nothing
@@ -952,6 +952,7 @@ program that describes them, builds the hosts and runners with them, and does ev
   hot reload hosts keep interpreter, layout and Objective-C bridge performance while application Rust code retains debug
   settings. Objective-C signature checks stay enabled: their encoding parser needs optimization too, since every native
   message checks its signature in debug builds.
+
 - Before a command on the app (`build`, `test`, `dev`, `run`, `package`, `publish`, `check`) `nsh` builds `describe`
   ("building the Rust crate …": Cargo decides whether the app's Rust code changed) and runs it when the program is
   new, keeping its output in `.nsh/rust/description.json` with the program's size and time (`RustApp::describe`). The
@@ -1008,15 +1009,15 @@ Builds from an empty target directory (`CARGO_TARGET_DIR`) on an M-series MacBoo
 crates by path from this checkout; "crates" counts cargo's `Compiling` lines. Before: the app's own command line
 (`cli`, `nsh_cli::main_with`), which every command built first; after: the `describe` program.
 
-| App, command | Before | After |
-|---|---|---|
-| `nsh init --template rust`, first `nsh build` | 46.9 s, 386 crates | 13.1 s, 59 crates |
-| `--template mixed` (TSX and a crate), first `nsh build` | 44.7 s, 369 crates | 9.4 s, 25 crates |
-| `examples/gallery-rs` (Rust root), first `nsh build` | 48.5 s, 386 crates | 15.6 s, 59 crates |
-| `examples/rust-exports` (TSX and a crate), first `nsh build` | 41.6 s, 369 crates | 7.2 s, 25 crates |
-| `examples/rust-exports`, then the first `nsh trace` (now `nsh test`) | 3.3 s, 0 crates | 15.6 s, 118 crates (the runner, with QuickJS) |
-| `--template rust`, then the first `nsh trace` (then without QuickJS) | 3.2 s, 0 crates | 13.0 s, 31 crates (`rust-trace`) |
-| One-line edit of the rust template, `nsh build` | 3.3 s, 2 crates | 1.0 s, 2 crates |
+| App, command                                                         | Before             | After                                         |
+| -------------------------------------------------------------------- | ------------------ | --------------------------------------------- |
+| `nsh init --template rust`, first `nsh build`                        | 46.9 s, 386 crates | 13.1 s, 59 crates                             |
+| `--template mixed` (TSX and a crate), first `nsh build`              | 44.7 s, 369 crates | 9.4 s, 25 crates                              |
+| `examples/gallery-rs` (Rust root), first `nsh build`                 | 48.5 s, 386 crates | 15.6 s, 59 crates                             |
+| `examples/rust-exports` (TSX and a crate), first `nsh build`         | 41.6 s, 369 crates | 7.2 s, 25 crates                              |
+| `examples/rust-exports`, then the first `nsh trace` (now `nsh test`) | 3.3 s, 0 crates    | 15.6 s, 118 crates (the runner, with QuickJS) |
+| `--template rust`, then the first `nsh trace` (then without QuickJS) | 3.2 s, 0 crates    | 13.0 s, 31 crates (`rust-trace`)              |
+| One-line edit of the rust template, `nsh build`                      | 3.3 s, 2 crates    | 1.0 s, 2 crates                               |
 
 A Rust app's runners were and are what they were: `nsh package --target macos` after the build compiled 60 crates
 for the release runner in both. The test runner links QuickJS, so the first `nsh test` of such an app builds what its
@@ -1082,7 +1083,7 @@ prerelease never marked latest, so `releases/latest` and the package managers ke
 whose `main` the nightly already has builds nothing (the `plan` job compares the commits). There is one `nightly`
 tag: each build deletes the previous nightly release and its tag and creates them again at the new commit (moving
 the tag through the refs API would need the `workflows` permission when the commits change workflows), so tags do
-not pile up. Running the workflow by hand with *nightly* publishes one at once. `install.sh --nightly` installs
+not pile up. Running the workflow by hand with _nightly_ publishes one at once. `install.sh --nightly` installs
 it; the CLI keeps the workspace version, and `-V` shows the commit and `nightly`: the dist job builds with
 `NSH_CHANNEL=nightly`, which the CLI's build script stamps in, and the nightly release carries `nsh-release.json`
 (`{ version, commit }`). Pull
@@ -1095,7 +1096,7 @@ The same tag runs `.github/workflows/release-crate.yml`, which publishes the lib
 `nsh-platform-web` and xtask are never published. A new version also sets the `version` of the `nsh-*` entries of
 both workspaces' `[workspace.dependencies]` (the run fails otherwise). Crates already on crates.io at that version are
 skipped, so a run stopped by crates.io's rate limit on new crates can simply be run again; running it by hand with
-*dry run* packages and verifies without uploading.
+_dry run_ packages and verifies without uploading.
 
 The CLI build script stamps `-V` / `--version` with seven characters of Git HEAD
 (or Cargo's packaged VCS metadata); crate dependency versions stay unchanged.
