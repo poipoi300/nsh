@@ -38,6 +38,7 @@ mod text;
 use std::ffi::c_void;
 
 pub use host::{run_root, set_runtime};
+pub use java::java_vm;
 /// What [`ui_sets!`] gives.
 pub use nsh_core::element::Registry;
 /// What [`root!`] gives.

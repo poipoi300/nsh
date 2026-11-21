@@ -59,6 +59,14 @@ pub(crate) struct Java {
 
 static JAVA: OnceLock<Java> = OnceLock::new();
 
+/// The process Java VM, available after NSH's JNI setup completes.
+/// Native threads can attach to it to call Java APIs.
+pub fn java_vm() -> Option<JavaVM> {
+    let vm = &JAVA.get()?.vm;
+    // SAFETY: JNI_OnLoad supplied this process VM. A JavaVM handle does not destroy it on drop.
+    unsafe { JavaVM::from_raw(vm.get_java_vm_pointer()) }.ok()
+}
+
 /// The cached classes; panics before `JNI_OnLoad`.
 pub(crate) fn java() -> &'static Java {
     JAVA.get()
