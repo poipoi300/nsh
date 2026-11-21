@@ -50,7 +50,6 @@ pub(crate) fn request(surface: &Rc<Surface>, id: u32, request: &FileRequest) {
     // dialog as its owner.
     let owner = surface.hwnd().0 as isize;
     let request = request.clone();
-    let reader = control.clone();
     let spawned = std::thread::Builder::new()
         .name("nsh-paths".into())
         .spawn(move || {
@@ -196,6 +195,7 @@ pub(crate) fn pick_files(surface: &Rc<Surface>, id: u32, request: &FilePickReque
     // dialog as its owner.
     let owner = surface.hwnd().0 as isize;
     let request = request.clone();
+    let reader = control.clone();
     let spawned = std::thread::Builder::new()
         .name("nsh-picker".into())
         .spawn(move || {
