@@ -243,7 +243,7 @@ events! {
     Cancel = "onCancel": "Escape or the Android back button was pressed while the overlay was the top one listening to it (raised by the core).",
     Position = "onPosition": "The core placed an overlay (payload: `placement`, the side it went on, `x`, `y`, `width`, `height` in the root view, `availableWidth`, `availableHeight`: the room on that side).",
     Host = "onHost": "The embedding host answered a [`Command::HostCall`] or sent an event to `host`'s listeners (`nsh`) (root only; payload: [`EventPayload::Json`], `{ type: \"reply\", id, ok, value?, error? }` or `{ type: \"event\", event, payload }`).",
-    Pick = "onPick": "A picker closed (root only; payload: [`EventPayload::Picked`], no files when cancelled).",
+    Pick = "onPick": "A picker closed (root only; [`EventPayload::Picked`] or [`EventPayload::FilesPicked`]).",
     LoadMoreAtStart = "onLoadMoreAtStart": "A list was scrolled close to its start after the user or a scroll command moved it (raised by the core).",
     OpenUrl = "onOpenUrl": "A [`Command::OpenUrl`] request finished (root only; payload: `id`, `opened`: whether the platform opened the URL).",
     CaretMove = "onCaretMove": "An input's caret moved: with its selection, or as its text scrolled or wrapped again (payload: `bounds`, the caret in the input; the core adds `pageBounds`, in the root view).",
@@ -1059,6 +1059,13 @@ pub enum EventPayload {
         id: u32,
         /// The files, in the order picked; none when cancelled.
         files: Vec<crate::picker::PickedFile>,
+    },
+    /// The result of a document picker ([`EventKind::Pick`]).
+    FilesPicked {
+        /// The request ([`Command::PickFiles`]).
+        id: u32,
+        /// The selection or the failure that prevented it.
+        result: crate::picker::FilePickResult,
     },
     /// What a speech recognition session reported ([`EventKind::Speech`],
     /// [`crate::speech`]).
@@ -2465,7 +2472,7 @@ pub enum Command {
     },
     /// Show the system's picker for files of any type (on the root;
     /// `Picker.pickFiles`) and report the picked ones, their bytes as they
-    /// are, as [`EventKind::Pick`] ([`EventPayload::Picked`] `id`; no files
+    /// are, as [`EventKind::Pick`] ([`EventPayload::FilesPicked`] `id`; no files
     /// when cancelled; [`crate::picker`]).
     PickFiles {
         /// The request.

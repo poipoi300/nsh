@@ -214,7 +214,7 @@ pub(crate) fn pick_images(
 /// The files the user picks in the system's picker (none when cancelled).
 pub(crate) fn pick_files(
     request: crate::picker::FilePickRequest,
-) -> (Answer<Vec<crate::picker::PickedFile>>, Action) {
+) -> (Answer<crate::picker::FilePickResult>, Action) {
     let (answer, slot) = Answer::new();
     (answer, Action::PickFiles(request, slot))
 }

@@ -1746,6 +1746,48 @@ fn picked_files_reach_js_with_their_names_and_bytes() {
     assert_eq!(asked.filters[0].extensions, ["pdf", "md"]);
 }
 
+const FILE_PICKER_FAILURE: &str = r#"import { mount, signal, Text, Picker } from "nsh";
+const shown = signal("");
+setTimeout(async () => {
+  const failure = await Picker.pickFiles().catch((error) => error.code);
+  const cancelled = await Picker.pickFiles();
+  shown.set(`${failure} cancelled=${cancelled.length}`);
+}, 0);
+mount(() => <Text>{shown()}</Text>);
+"#;
+
+#[test]
+fn picked_files_distinguish_a_dialog_failure_from_cancellation() {
+    use nsh_core::picker::{FilePickError, FilePickSelection};
+
+    let (engine, rx) = start(FILE_PICKER_FAILURE);
+    let control = engine.control();
+    let mut opened = 0;
+    until(&rx, |batch| {
+        for item in &batch.items {
+            if let MountItem::Command {
+                id: ROOT_ID,
+                command: Command::PickFiles { id, .. },
+            } = item
+            {
+                let result = if opened == 0 {
+                    Err(FilePickError::Dialog("File chooser unavailable".into()))
+                } else {
+                    Ok(FilePickSelection::default())
+                };
+                opened += 1;
+                control.dispatch_event(
+                    ROOT_ID,
+                    EventKind::Pick,
+                    EventPayload::FilesPicked { id: *id, result },
+                );
+            }
+        }
+        shows(batch, "ERR_FILE_PICKER cancelled=0")
+    });
+    assert_eq!(opened, 2);
+}
+
 const FILE_PICKER_LIMIT: &str = r#"import { mount, signal, Text } from "nsh";
 import { Picker } from "nsh";
 
@@ -1787,6 +1829,7 @@ fn picked_files_past_the_apps_limit_reach_js_unread() {
                     read("a.txt", b"abcd"),
                     read("b.txt", b"abcde"),
                     nsh_core::picker::PickedFile::too_large("clip.mp4", "", 400_000_000),
+                    nsh_core::picker::PickedFile::unreadable("locked.pdf"),
                 ];
                 control.dispatch_event(
                     ROOT_ID,
@@ -1798,7 +1841,7 @@ fn picked_files_past_the_apps_limit_reach_js_unread() {
         shows(
             batch,
             "RangeError a.txt:text/plain:4:read:4 b.txt:text/plain:5:tooLarge:none \
-             clip.mp4:video/mp4:400000000:tooLarge:none",
+             clip.mp4:video/mp4:400000000:tooLarge:none locked.pdf:application/pdf:0:unreadable:none",
         )
     });
     assert_eq!(asked.expect("a pick").max_size, Some(4));

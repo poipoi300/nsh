@@ -63,13 +63,12 @@ final class Picker {
 
     private Picker() {}
 
-    /** Shows the picker for {@code request}; one that cannot be shown answers with nothing. */
+    /** Shows the picker for {@code request}; a document picker that cannot be shown reports why. */
     @SuppressWarnings("deprecation")
     static void show(Context context, Request request) {
         Activity activity = SystemUi.activity(context);
         if (activity == null || activity.isFinishing()) {
-            Log.w(TAG, "the photo picker needs an activity");
-            answer(request, new ArrayList<>());
+            failed(request, "The picker needs an activity.");
             return;
         }
         Intent intent;
@@ -88,13 +87,17 @@ final class Picker {
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, request.limit > 1);
         }
-        android.app.FragmentManager manager = activity.getFragmentManager();
-        Results results = (Results) manager.findFragmentByTag(FRAGMENT);
-        if (results == null) {
-            results = new Results();
-            manager.beginTransaction().add(results, FRAGMENT).commitNow();
+        try {
+            android.app.FragmentManager manager = activity.getFragmentManager();
+            Results results = (Results) manager.findFragmentByTag(FRAGMENT);
+            if (results == null) {
+                results = new Results();
+                manager.beginTransaction().add(results, FRAGMENT).commitNow();
+            }
+            results.start(intent, request);
+        } catch (RuntimeException e) {
+            failed(request, e.toString());
         }
-        results.start(intent, request);
     }
 
     /**
@@ -145,9 +148,8 @@ final class Picker {
             try {
                 startActivityForResult(intent, code);
             } catch (RuntimeException e) {
-                Log.w(TAG, "cannot show the photo picker", e);
                 pending.remove(code);
-                answer(request, new ArrayList<>());
+                failed(request, e.toString());
             }
         }
 
@@ -168,11 +170,16 @@ final class Picker {
                     uris.add(data.getData());
                 }
             }
-            if (uris.size() > request.limit) uris = uris.subList(0, request.limit);
+            boolean truncated = uris.size() > request.limit;
+            if (truncated) uris = uris.subList(0, request.limit);
+            if (uris.isEmpty()) {
+                answer(request, new ArrayList<>(), false, null);
+                return;
+            }
             ContentResolver resolver = getActivity().getContentResolver();
             List<Uri> picked = uris;
             Log.i(TAG, "picked " + uris.size() + (request.files ? " file(s)" : " image(s)"));
-            new Thread(() -> answer(request, read(resolver, picked, request)), "nsh-picker").start();
+            new Thread(() -> answer(request, read(resolver, picked, request), truncated, null), "nsh-picker").start();
         }
     }
 
@@ -180,9 +187,9 @@ final class Picker {
     private static final class Picked {
         String name;
         String type;
-        /** {@code null}: not read, larger than the pick reads ({@link #length}). */
+        /** {@code null}: not read ({@link #length}). */
         byte[] bytes;
-        /** The size in bytes of a file not read. */
+        /** The size in bytes of a file not read, or -1 if unreadable. */
         long length;
         int width;
         int height;
@@ -195,13 +202,24 @@ final class Picker {
                 Picked file = request.files ? readFile(resolver, uri, request) : prepare(resolver, uri, request);
                 if (file != null) files.add(file);
             } catch (Exception | OutOfMemoryError e) {
-                Log.w(TAG, "cannot read a picked image", e);
+                Log.w(TAG, "cannot read a picked file", e);
+                if (request.files) {
+                    Picked unreadable = new Picked();
+                    unreadable.name = uri == null ? "file" : displayName(resolver, uri);
+                    unreadable.length = -1;
+                    files.add(unreadable);
+                }
             }
         }
         return files;
     }
 
-    private static void answer(Request request, List<Picked> files) {
+    private static void failed(Request request, String failure) {
+        Log.w(TAG, "cannot complete the picker: " + failure);
+        answer(request, new ArrayList<>(), false, failure);
+    }
+
+    private static void answer(Request request, List<Picked> files, boolean truncated, String failure) {
         int n = files.size();
         String[] names = new String[n];
         String[] types = new String[n];
@@ -218,7 +236,8 @@ final class Picker {
             sizes[i * 2 + 1] = f.height;
         }
         long handle = request.view.handle;
-        if (handle != 0) Native.picked(handle, request.id, names, types, data, sizes, lengths);
+        if (handle != 0) Native.picked(handle, request.id, names, types, data, sizes, lengths,
+                request.files, truncated, failure);
     }
 
     /**

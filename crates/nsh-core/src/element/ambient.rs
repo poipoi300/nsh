@@ -851,10 +851,11 @@ pub fn pick_images(request: crate::picker::PickRequest) -> Answer<Vec<crate::pic
 /// Shows the system's picker for files of any type (the open dialog on the
 /// desktops, the document picker on iOS and Android, a file input on the web;
 /// TS: `Picker.pickFiles`), to await in a task: the files the user picked,
-/// their bytes as they are; none when cancelled ([`crate::picker`]).
+/// their bytes as they are. A cancellation returns an empty selection.
+/// A dialog failure returns [`crate::picker::FilePickError`].
 pub fn pick_files(
     request: crate::picker::FilePickRequest,
-) -> Answer<Vec<crate::picker::PickedFile>> {
+) -> Answer<crate::picker::FilePickResult> {
     let (answer, action) = super::services::pick_files(request);
     act(action);
     answer

@@ -20,7 +20,7 @@ use block2::RcBlock;
 use nsh_core::{
     EventKind, EventPayload, ROOT_ID,
     file_dialog::{self, FileFilter, FileRequest, OpenDialog, SaveDialog},
-    picker::{FilePickRequest, read_picked_files},
+    picker::{FilePickError, FilePickRequest, read_picked_files},
 };
 use nsh_engine::EngineControl;
 use objc2::{
@@ -186,23 +186,32 @@ pub(crate) fn pick_files(surface: &Rc<Surface>, id: u32, request: &FilePickReque
     let Some(control) = control(surface) else {
         return;
     };
-    let answer = move |control: EngineControl, files| {
-        control.dispatch_event(ROOT_ID, EventKind::Pick, EventPayload::Picked { id, files });
+    let answer = move |control: &EngineControl, result| {
+        control.dispatch_event(
+            ROOT_ID,
+            EventKind::Pick,
+            EventPayload::FilesPicked { id, result },
+        );
     };
     let picked = control.clone();
     let asked = request.clone();
     let shown = open_panel(surface, &request.dialog(), move |paths| {
-        let control = picked.clone();
+        let reader = picked.clone();
         let asked = asked.clone();
         let spawned = std::thread::Builder::new()
             .name("nsh-picker".into())
-            .spawn(move || answer(control, read_picked_files(&paths, &asked)));
+            .spawn(move || answer(&reader, Ok(read_picked_files(&paths, &asked))));
         if let Err(e) = spawned {
-            log::warn!("cannot read the picked files: {e}");
+            answer(&picked, Err(FilePickError::Dialog(e.to_string())));
         }
     });
     if !shown {
-        answer(control, Vec::new());
+        answer(
+            &control,
+            Err(FilePickError::Dialog(
+                "The document picker is unavailable.".into(),
+            )),
+        );
     }
 }
 

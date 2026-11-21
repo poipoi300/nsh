@@ -565,6 +565,18 @@ struct SpeechSession {
     control: Option<Box<dyn crate::speech::SpeechControl>>,
 }
 
+/// An answer waiting for the platform's picker.
+enum PendingPick {
+    Images(
+        crate::picker::PickRequest,
+        AnswerSlot<Vec<crate::picker::PickedFile>>,
+    ),
+    Files(
+        crate::picker::FilePickRequest,
+        AnswerSlot<crate::picker::FilePickResult>,
+    ),
+}
+
 /// The core's component state.
 pub(super) struct Components {
     pub(super) web_evaluations: super::web_evaluation::Evaluations,
@@ -631,14 +643,7 @@ pub(super) struct Components {
     clipboard_reads: FxHashMap<u32, ClipboardRead>,
     next_clipboard_read: u32,
     /// Picks waiting for the platform's picker, by request.
-    #[allow(clippy::type_complexity)]
-    picks: FxHashMap<
-        u32,
-        (
-            crate::picker::Pick,
-            AnswerSlot<Vec<crate::picker::PickedFile>>,
-        ),
-    >,
+    picks: FxHashMap<u32, PendingPick>,
     next_pick: u32,
     /// The speech recognition session running, if any.
     speech: Option<SpeechSession>,
@@ -6078,7 +6083,7 @@ impl<M: TextEngine> Core<M> {
                 self.components.next_pick += 1;
                 self.components
                     .picks
-                    .insert(id, (crate::picker::Pick::Images(request), answer));
+                    .insert(id, PendingPick::Images(request, answer));
                 let _ = self.apply_op(Op::Command {
                     id: crate::ROOT_ID,
                     command: Command::PickImages { id, request },
@@ -6086,7 +6091,9 @@ impl<M: TextEngine> Core<M> {
             }
             Action::PickFiles(request, answer) => {
                 if !self.access.allows_picker() {
-                    answer.borrow_mut().deliver(Vec::new());
+                    answer
+                        .borrow_mut()
+                        .deliver(Err(crate::picker::FilePickError::AccessDenied));
                     self.deny(
                         "the picker is not granted: add `\"picker\": true` to capabilities in nsh.json"
                             .into(),
@@ -6099,7 +6106,7 @@ impl<M: TextEngine> Core<M> {
                         &self.components.executor,
                         crate::ROOT_ID,
                         Box::pin(async move {
-                            let files = crate::picker::finish_files(&request, picked.await);
+                            let files = picked.await.map(|selection| selection.finish(&request));
                             answer.borrow_mut().deliver(files);
                         }),
                     );
@@ -6109,7 +6116,7 @@ impl<M: TextEngine> Core<M> {
                 self.components.next_pick += 1;
                 self.components
                     .picks
-                    .insert(id, (crate::picker::Pick::Files(request.clone()), answer));
+                    .insert(id, PendingPick::Files(request.clone(), answer));
                 let _ = self.apply_op(Op::Command {
                     id: crate::ROOT_ID,
                     command: Command::PickFiles { id, request },
@@ -6790,12 +6797,30 @@ impl<M: TextEngine> Core<M> {
                 true
             }
             EventKind::Pick if id == crate::ROOT_ID => {
-                let EventPayload::Picked { id: request, files } = payload else {
-                    return false;
-                };
-                if let Some((asked, answer)) = self.components.picks.remove(request) {
-                    let files = asked.finish(files.clone());
-                    answer.borrow_mut().deliver(files);
+                match payload {
+                    EventPayload::Picked { id, files } => match self.components.picks.remove(id) {
+                        Some(PendingPick::Images(request, answer)) => {
+                            answer
+                                .borrow_mut()
+                                .deliver(crate::picker::finish(&request, files.clone()));
+                        }
+                        Some(PendingPick::Files(request, answer)) => {
+                            let selection = crate::picker::FilePickSelection::new(files.clone())
+                                .finish(&request);
+                            answer.borrow_mut().deliver(Ok(selection));
+                        }
+                        None => {}
+                    },
+                    EventPayload::FilesPicked { id, result } => {
+                        if let Some(PendingPick::Files(request, answer)) =
+                            self.components.picks.remove(id)
+                        {
+                            answer.borrow_mut().deliver(
+                                result.clone().map(|selection| selection.finish(&request)),
+                            );
+                        }
+                    }
+                    _ => return false,
                 }
                 true
             }

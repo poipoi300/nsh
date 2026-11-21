@@ -1813,7 +1813,7 @@ interface PickedFile {
   name: string;
   type: string;
   size: number; // 字节数，读没读都有
-  status: "read" | "tooLarge"; // "tooLarge"：超过 maxSize，内容没有读入
+  status: "read" | "tooLarge" | "unreadable";
 }
 
 interface PickImagesOptions {
@@ -1833,9 +1833,9 @@ interface PickedImage {
 | TS | Rust |
 |---|---|
 | `await Picker.pickImages(options)` | `pick_images(request).await -> Vec<PickedFile>` |
-| `await Picker.pickFiles(options)` | `pick_files(request).await -> Vec<PickedFile>` |
+| `await Picker.pickFiles(options)` | `pick_files(request).await -> FilePickResult` |
 | `maxSize` | `FilePickRequest::new(multiple, limit).max_size(10 << 20)` |
-| `picked.status`、`.size` | `file.status`（`PickedStatus::TooLarge`）、`file.len` |
+| `picked.status`、`.size` | `file.status`（`PickedStatus`）、`file.len` |
 | `multiple`、`limit` | `PickRequest::new(multiple, limit)`（`limit` 为 0 表示最多 100） |
 | `maxDimension` | `request.max_dimension = Some(DevicePixels(2048))` |
 | `quality` | `request.quality = Some(Percentage(0.8))` |
@@ -1950,9 +1950,11 @@ photos.set([...photos(), ...images.map((image) => URL.createObjectURL(image.file
 pickFiles(options?: PickFilesOptions): Promise<PickedFile[]>;
 ```
 
-显示系统的文件选择器，可选任意类型的文件，resolve 为用户选中的文件；用户取消时 resolve 为 `[]`。拒绝的情况与
-`pickImages` 相同：超出范围的选项（`limit: 0`、没有扩展名的过滤器）以 `RangeError` reject，没有 `picker` 能力时以
-`ERR_ACCESS_DENIED` reject。Rust：`pick_files(request)`。
+显示系统的文件选择器，可选任意类型的文件，resolve 为用户选中的文件。用户取消时 resolve 为 `[]`。无效选项以
+`RangeError` reject，缺少 `picker` 能力时以 `ERR_ACCESS_DENIED` reject，无法打开选择器时以 `ERR_FILE_PICKER`
+reject。无法读取的文件保留名称，`file` 为 `null`，`status` 为 `"unreadable"`。
+Rust 的 `pick_files(request)` 返回 `Result<FilePickSelection, FilePickError>`。用户取消时 `files` 为空。
+`truncated` 表示选中的文件超过请求上限。
 
 ```tsx
 const picked = await Picker.pickFiles({
@@ -1960,9 +1962,9 @@ const picked = await Picker.pickFiles({
   filters: [{ name: "文档", extensions: ["pdf", "md"] }],
   maxSize: 10 * 1024 * 1024,
 });
-for (const { file, name } of picked) {
+for (const { file, name, status } of picked) {
   if (!file) {
-    showError(`${name} 超过 10 MB`);
+    showError(status === "tooLarge" ? `${name} 超过 10 MB` : `无法读取 ${name}`);
     continue;
   }
   const form = new FormData();

@@ -21,7 +21,10 @@ use block2::RcBlock;
 use nsh_core::{
     EventKind, EventPayload, ImageData, file_dialog,
     geometry::{DevicePixels, Size},
-    picker::{Encoding, FilePickRequest, PickFormat, PickRequest, PickedFile},
+    picker::{
+        Encoding, FilePickError, FilePickRequest, FilePickResult, PickFormat, PickRequest,
+        PickedFile,
+    },
 };
 use nsh_engine::EngineControl;
 use objc2::{
@@ -191,6 +194,14 @@ pub(crate) struct DocumentIvars {
     control: EngineControl,
 }
 
+fn answer_files(control: &EngineControl, id: u32, result: FilePickResult) {
+    control.dispatch_event(
+        nsh_core::ROOT_ID,
+        EventKind::Pick,
+        EventPayload::FilesPicked { id, result },
+    );
+}
+
 define_class!(
     /// The delegate of one document picker: reads what the user picked.
     #[unsafe(super(NSObject))]
@@ -210,14 +221,15 @@ define_class!(
                 .collect();
             let DocumentIvars { id, request, control } = self.ivars();
             let (id, request, control) = (*id, request.clone(), control.clone());
+            let reader = control.clone();
             let spawned = std::thread::Builder::new()
                 .name("nsh-picker".into())
                 .spawn(move || {
                     let files = nsh_core::picker::read_picked_files(&paths, &request);
-                    answer(&control, id, files);
+                    answer_files(&reader, id, Ok(files));
                 });
             if let Err(e) = spawned {
-                log::warn!("cannot read the picked files: {e}");
+                answer_files(&control, id, Err(FilePickError::Dialog(e.to_string())));
             }
             self.forget();
         }
@@ -225,7 +237,7 @@ define_class!(
         #[unsafe(method(documentPickerWasCancelled:))]
         fn was_cancelled(&self, _picker: &UIViewController) {
             let DocumentIvars { id, control, .. } = self.ivars();
-            answer(control, *id, Vec::new());
+            answer_files(control, *id, Ok(Default::default()));
             self.forget();
         }
 
@@ -238,7 +250,7 @@ define_class!(
                 .with_borrow(|shown| shown.iter().any(|d| std::ptr::eq(&**d, this)));
             if shown {
                 let DocumentIvars { id, control, .. } = self.ivars();
-                answer(control, *id, Vec::new());
+                answer_files(control, *id, Ok(Default::default()));
                 self.forget();
             }
         }
@@ -253,7 +265,7 @@ impl DocumentDelegate {
 }
 
 /// Shows the document picker over `view`'s window for pick `id`, as copies
-/// the app may read; a picker that cannot be shown answers with no files.
+/// the app may read; a picker that cannot be shown reports a failure.
 pub(crate) fn pick_files(
     id: u32,
     request: FilePickRequest,
@@ -266,8 +278,13 @@ pub(crate) fn pick_files(
         class(c"UIDocumentPickerViewController"),
         crate::system::top_controller(view),
     ) else {
-        log::warn!("the document picker cannot be shown");
-        answer(control, id, Vec::new());
+        answer_files(
+            control,
+            id,
+            Err(FilePickError::Dialog(
+                "The document picker is unavailable.".into(),
+            )),
+        );
         return;
     };
     // SAFETY: UniformTypeIdentifiers' and UIKit's documented API (iOS 14+),
@@ -294,7 +311,13 @@ pub(crate) fn pick_files(
         let picker: Option<Retained<AnyObject>> =
             msg_send![alloc, initForOpeningContentTypes: &*types, asCopy: true];
         let Some(picker) = picker else {
-            answer(control, id, Vec::new());
+            answer_files(
+                control,
+                id,
+                Err(FilePickError::Dialog(
+                    "The document picker could not be opened.".into(),
+                )),
+            );
             return;
         };
         let _: () = msg_send![&picker, setAllowsMultipleSelection: request.multiple()];

@@ -1380,7 +1380,9 @@ fn payload_object<'js>(cx: &Ctx<'js>, payload: &EventPayload) -> rquickjs::Resul
             obj.set("uris", uris)?;
         }
         // The core answers picks; JS never gets their files this way.
-        EventPayload::Picked { id, .. } => obj.set("id", *id)?,
+        EventPayload::Picked { id, .. } | EventPayload::FilesPicked { id, .. } => {
+            obj.set("id", *id)?
+        }
         // The core answers these too.
         EventPayload::FileRequest { id, .. } => obj.set("id", *id)?,
         // And offscreen canvas renders.

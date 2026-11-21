@@ -2505,7 +2505,12 @@ extern "system" fn Java_com_longbridge_nsh_Native_picked(
     data: jni::objects::JObjectArray<'_>,
     sizes: jni::objects::JIntArray<'_>,
     lengths: jni::objects::JLongArray<'_>,
+    documents: jboolean,
+    truncated: jboolean,
+    failure: JString<'_>,
 ) {
+    use nsh_core::picker::{FilePickError, FilePickSelection, PickedFile};
+
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
     let count = env.get_array_length(&data).unwrap_or(0).max(0);
@@ -2527,10 +2532,12 @@ extern "system" fn Java_com_longbridge_nsh_Native_picked(
         let Ok(bytes) = env.get_object_array_element(&data, i) else {
             continue;
         };
-        // No bytes: a file larger than the pick reads, its size alone.
+        // No bytes: the file was too large or could not be read.
         if bytes.is_null() {
-            let len = u64::try_from(lens[i as usize]).unwrap_or(0);
-            files.push(nsh_core::picker::PickedFile::too_large(name, mime, len));
+            files.push(match u64::try_from(lens[i as usize]) {
+                Ok(len) => PickedFile::too_large(name, mime, len),
+                Err(_) => PickedFile::unreadable(name),
+            });
             continue;
         }
         let Ok(bytes) = env.convert_byte_array(JByteArray::from(bytes)) else {
@@ -2548,14 +2555,22 @@ extern "system" fn Java_com_longbridge_nsh_Native_picked(
         files.push(file);
     }
     if let Some(control) = host.control() {
-        control.dispatch_event(
-            nsh_core::ROOT_ID,
-            EventKind::Pick,
-            EventPayload::Picked {
-                id: id as u32,
-                files,
-            },
-        );
+        let id = id as u32;
+        let payload = if documents != 0 {
+            let result = if failure.is_null() {
+                Ok(FilePickSelection::new(files).with_truncated(truncated != 0))
+            } else {
+                let message = env
+                    .get_string(&failure)
+                    .map(String::from)
+                    .unwrap_or_else(|_| "The document picker could not be opened.".into());
+                Err(FilePickError::Dialog(message))
+            };
+            EventPayload::FilesPicked { id, result }
+        } else {
+            EventPayload::Picked { id, files }
+        };
+        control.dispatch_event(nsh_core::ROOT_ID, EventKind::Pick, payload);
     }
 }
 

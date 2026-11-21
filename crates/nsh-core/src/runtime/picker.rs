@@ -60,9 +60,10 @@ impl Picker {
     /// except a file larger than `maxSize` (or 512 MiB): that one comes
     /// with its name and size only, `file` null and `status`
     /// `"tooLarge"`, so the app can tell the user. Needs no permission on any
-    /// platform. Rejects with `ERR_ACCESS_DENIED` when the `picker`
-    /// capability is not granted, and with a `RangeError` for options out
-    /// of range.
+    /// platform. An unreadable file has `file` null and status
+    /// `"unreadable"`. Rejects with `ERR_ACCESS_DENIED` without the picker
+    /// capability, `RangeError` for invalid options, and `ERR_FILE_PICKER`
+    /// if the picker fails.
     pub(crate) fn pick_files(
         options: Option<PickFilesOptions>,
         sys: System,
@@ -76,8 +77,10 @@ impl Picker {
             ));
         }
         Ok(Later::new(async move {
-            let files = crate::prelude::pick_files(request).await;
-            Ok::<_, JsError>(files.into_iter().map(PickedDocument).collect())
+            let selection = crate::prelude::pick_files(request)
+                .await
+                .map_err(|error| JsError::Error(error.to_string()).with_code("ERR_FILE_PICKER"))?;
+            Ok::<_, JsError>(selection.files.into_iter().map(PickedDocument).collect())
         }))
     }
 }
@@ -153,10 +156,10 @@ impl JsValue for PickedDocument {
              \x20 name: string;\n\
              \x20 /** Its media type (`application/pdf`; `application/octet-stream` when unknown). */\n\
              \x20 type: string;\n\
-             \x20 /** Its size in bytes, read or not. */\n\
+             \x20 /** Its size in bytes when known. */\n\
              \x20 size: number;\n\
-             \x20 /** `\"read\"`: `file` holds its bytes; `\"tooLarge\"`: it is larger than `maxSize` (or 512 MiB), so its bytes were not read. */\n\
-             \x20 status: \"read\" | \"tooLarge\";\n\
+             \x20 /** `\"read\"`: bytes available. `\"tooLarge\"`: exceeds the size limit. `\"unreadable\"`: reading failed. */\n\
+             \x20 status: \"read\" | \"tooLarge\" | \"unreadable\";\n\
              }"
             .into()
         })
@@ -172,7 +175,8 @@ impl JsValue for PickedDocument {
         let object = owned.get().raw();
         let (js_file, status) = match file.status {
             picker::PickedStatus::TooLarge => (host.null(), "tooLarge"),
-            _ => (
+            picker::PickedStatus::Unreadable => (host.null(), "unreadable"),
+            picker::PickedStatus::Read => (
                 host.new_file(&file.data, &file.mime, &file.name, file.last_modified)?,
                 "read",
             ),

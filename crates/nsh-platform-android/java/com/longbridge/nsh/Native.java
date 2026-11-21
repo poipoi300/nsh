@@ -208,10 +208,11 @@ final class Native {
 
     /**
      * The images or files picked for pick {@code id} (none: cancelled); {@code sizes} holds each one's width and height
-     * in pixels; a file not read (larger than the pick reads) has {@code null} data and its size in bytes in
-     * {@code lengths}.
+     * in pixels. A file not read has {@code null} data and its size in bytes in {@code lengths}
+     * (-1 if unreadable). A document pick can report excess files or why the picker failed.
      */
-    static native void picked(long handle, int id, String[] names, String[] types, byte[][] data, int[] sizes, long[] lengths);
+    static native void picked(long handle, int id, String[] names, String[] types, byte[][] data, int[] sizes,
+            long[] lengths, boolean documents, boolean truncated, String failure);
 
     /** A native component emitted {@code name} with {@code json} data (null: none). */
     static native void componentEvent(long handle, int id, String name, String json);

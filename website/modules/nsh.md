@@ -1875,7 +1875,7 @@ interface PickedFile {
   name: string;
   type: string;
   size: number; // in bytes, read or not
-  status: "read" | "tooLarge"; // "tooLarge": larger than maxSize, its bytes not read
+  status: "read" | "tooLarge" | "unreadable";
 }
 
 interface PickImagesOptions {
@@ -1901,10 +1901,10 @@ interface PickedImage {
 | `format` | `request.format = PickFormat::Current` |
 | `image.file.name`, `.type`, `.size` | `file.name`, `file.mime`, `file.data.len()` |
 | `image.size` | `file.size` (`Size<DevicePixels>`) |
-| `await Picker.pickFiles(options)` | `pick_files(request).await -> Vec<PickedFile>` |
+| `await Picker.pickFiles(options)` | `pick_files(request).await -> FilePickResult` |
 | `filters` | `FilePickRequest::new(multiple, limit).filter(FileFilter::new("Documents", ["pdf"]))` |
 | `maxSize` | `.max_size(10 << 20)` |
-| `picked.status`, `.size` | `file.status` (`PickedStatus::TooLarge`), `file.len` |
+| `picked.status`, `.size` | `file.status` (`PickedStatus`), `file.len` |
 
 ### Picker.pickImages
 
@@ -2015,8 +2015,11 @@ pickFiles(options?: PickFilesOptions): Promise<PickedFile[]>;
 ```
 
 Shows the system's picker for files of any type and resolves with what the user picked, or `[]` when the user cancels.
-It rejects as `pickImages` does: a `RangeError` for options out of range (`limit: 0`, a filter without extensions) and
-`ERR_ACCESS_DENIED` without the `picker` capability. Rust: `pick_files(request)`.
+It rejects with `RangeError` for invalid options, `ERR_ACCESS_DENIED` without the `picker` capability, or
+`ERR_FILE_PICKER` if the picker cannot open. Unreadable files keep their names and have `file: null` and
+`status: "unreadable"`. Rust's `pick_files(request)` returns a `Result<FilePickSelection, FilePickError>`.
+A canceled selection has an empty `files` list. `truncated` tells Rust callers when the user selected more
+files than the request admits.
 
 ```tsx
 const picked = await Picker.pickFiles({
@@ -2024,9 +2027,9 @@ const picked = await Picker.pickFiles({
   filters: [{ name: "Documents", extensions: ["pdf", "md"] }],
   maxSize: 10 * 1024 * 1024,
 });
-for (const { file, name } of picked) {
+for (const { file, name, status } of picked) {
   if (!file) {
-    showError(`${name} is larger than 10 MB`);
+    showError(status === "tooLarge" ? `${name} is larger than 10 MB` : `${name} could not be read`);
     continue;
   }
   const form = new FormData();

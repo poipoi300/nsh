@@ -7281,7 +7281,7 @@ class Player {
     input.multiple = limit > 1;
     input.style.display = "none";
     let answered = false;
-    const answer = async (files) => {
+    const answer = async (files, failure = "") => {
       if (answered) return;
       answered = true;
       input.remove();
@@ -7300,12 +7300,16 @@ class Player {
             lastModified: file.lastModified,
           });
         } catch {
-          // Unreadable: left out.
+          picked.push({ name: file.name, unreadable: true });
         }
       }
       if (app !== this.app) return;
       this.call((w) => {
         for (const p of picked) {
+          if (p.unreadable) {
+            this.withStrings([p.name], (np, nl) => w.nsh_picked_unreadable(np, nl));
+            continue;
+          }
           if (p.bytes === null) {
             this.withStrings([p.name, p.type], (np, nl, tp, tl) =>
               w.nsh_picked_too_large(np, nl, tp, tl, p.size, p.lastModified));
@@ -7314,13 +7318,19 @@ class Player {
           this.withStrings([p.name, p.type, p.bytes], (np, nl, tp, tl, bp, bl) =>
             w.nsh_picked_file(np, nl, tp, tl, bp, bl, 0, 0, p.lastModified));
         }
-        return w.nsh_picked(request);
+        return this.withStrings([failure], (p, len) =>
+          w.nsh_files_picked(request, Number(files.length > limit), p, len));
       });
     };
     input.addEventListener("change", () => answer([...(input.files ?? [])]));
     input.addEventListener("cancel", () => answer([]));
     this.root.append(input);
-    input.click();
+    try {
+      if (typeof input.showPicker === "function") input.showPicker();
+      else input.click();
+    } catch (error) {
+      answer([], String(error));
+    }
   }
 
   async preparePicked(file, maxDimension, quality) {

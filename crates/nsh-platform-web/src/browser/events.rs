@@ -191,6 +191,7 @@ pub(super) fn payload(host: &Bindings, payload: &EventPayload) -> Result<Value, 
             ])?
         }
         EventPayload::Picked { id, .. }
+        | EventPayload::FilesPicked { id, .. }
         | EventPayload::FileRequest { id, .. }
         | EventPayload::CanvasImage { id, .. }
         | EventPayload::Speech { id, .. }

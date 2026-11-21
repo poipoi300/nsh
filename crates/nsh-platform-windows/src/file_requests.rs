@@ -15,7 +15,7 @@ use std::{
 use nsh_core::{
     EventKind, EventPayload, ROOT_ID,
     file_dialog::{FileFilter, FileRequest, OpenDialog, SaveDialog},
-    picker::{FilePickRequest, read_picked_files},
+    picker::{FilePickError, FilePickRequest, read_picked_files},
 };
 use windows::{
     Win32::{
@@ -50,6 +50,7 @@ pub(crate) fn request(surface: &Rc<Surface>, id: u32, request: &FileRequest) {
     // dialog as its owner.
     let owner = surface.hwnd().0 as isize;
     let request = request.clone();
+    let reader = control.clone();
     let spawned = std::thread::Builder::new()
         .name("nsh-paths".into())
         .spawn(move || {
@@ -198,17 +199,25 @@ pub(crate) fn pick_files(surface: &Rc<Surface>, id: u32, request: &FilePickReque
     let spawned = std::thread::Builder::new()
         .name("nsh-picker".into())
         .spawn(move || {
-            let paths = with_com(|| pick_paths(HWND(owner as *mut _), &request.dialog()))
+            let result = with_com(|| pick_paths(HWND(owner as *mut _), &request.dialog()))
                 .and_then(|paths| paths)
-                .unwrap_or_else(|e| {
-                    log::warn!("the file dialog failed: {e}");
-                    Vec::new()
-                });
-            let files = read_picked_files(&paths, &request);
-            control.dispatch_event(ROOT_ID, EventKind::Pick, EventPayload::Picked { id, files });
+                .map(|paths| read_picked_files(&paths, &request))
+                .map_err(|error| FilePickError::Dialog(error.to_string()));
+            reader.dispatch_event(
+                ROOT_ID,
+                EventKind::Pick,
+                EventPayload::FilesPicked { id, result },
+            );
         });
     if let Err(e) = spawned {
-        log::warn!("cannot show the file dialog: {e}");
+        control.dispatch_event(
+            ROOT_ID,
+            EventKind::Pick,
+            EventPayload::FilesPicked {
+                id,
+                result: Err(FilePickError::Dialog(e.to_string())),
+            },
+        );
     }
 }
 

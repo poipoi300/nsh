@@ -17,11 +17,15 @@
 //! a [`FilePickRequest`]; the platform shows its picker for documents (iOS
 //! `UIDocumentPickerViewController`, Android's `ACTION_OPEN_DOCUMENT`, the
 //! open dialog on the desktops, `<input type=file>` on the web) and answers
-//! with the same event, each file's bytes as they are and its name kept. A
+//! as [`EventPayload::FilesPicked`](crate::EventPayload::FilesPicked), each
+//! file's bytes as they are and its name kept. A
 //! file larger than the request reads ([`FilePickRequest::size_limit`]: the
 //! app's [`FilePickRequest::max_size`], at most [`MAX_PICKED_FILE_BYTES`])
 //! is not read into memory: it answers with its name and size only
 //! ([`PickedStatus::TooLarge`]), so the app can tell the user.
+//! Unreadable files keep their names ([`PickedStatus::Unreadable`]).
+//! A failed dialog answers with [`FilePickError`]. Canceling answers with a
+//! successful, empty [`FilePickSelection`].
 //!
 //! An embedding app can show a picker of its own instead: a
 //! [`PickerBackend`] given to the core
@@ -297,6 +301,8 @@ pub enum PickedStatus {
     /// ([`FilePickRequest::size_limit`]): its bytes were not read, and only
     /// its name, type and size ([`PickedFile::len`]) answer.
     TooLarge,
+    /// The platform could not read the file. Its name is retained.
+    Unreadable,
 }
 
 impl std::fmt::Debug for PickedFile {
@@ -335,6 +341,15 @@ impl PickedFile {
             mime: mime.into(),
             len,
             status: PickedStatus::TooLarge,
+            ..Self::default()
+        }
+    }
+
+    /// The file `name`, whose bytes the platform could not read.
+    pub fn unreadable(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            status: PickedStatus::Unreadable,
             ..Self::default()
         }
     }
@@ -440,6 +455,67 @@ pub fn file_name(name: &str, mime: &str) -> String {
 /// The files a pick resolves with, as the core hands them to the app.
 pub type PickFuture = Pin<Box<dyn Future<Output = Vec<PickedFile>> + Send>>;
 
+/// Why a document picker could not complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FilePickError {
+    /// The app is missing the picker capability.
+    AccessDenied,
+    /// The system picker failed, with the platform's explanation.
+    Dialog(String),
+}
+
+impl std::fmt::Display for FilePickError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AccessDenied => {
+                f.write_str("The app does not have permission to open the file picker.")
+            }
+            Self::Dialog(reason) => write!(f, "The file picker failed: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for FilePickError {}
+
+/// The result of a document pick. A cancellation has no files and is not truncated.
+#[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
+pub struct FilePickSelection {
+    /// The selected files in order, including files whose bytes could not be read.
+    pub files: Vec<PickedFile>,
+    /// The user selected more than the request's limit.
+    pub truncated: bool,
+}
+
+impl FilePickSelection {
+    /// A selection of `files`, with no further files dropped by the platform.
+    pub fn new(files: Vec<PickedFile>) -> Self {
+        Self {
+            files,
+            truncated: false,
+        }
+    }
+
+    /// Records whether the platform stopped reading at the request's count limit.
+    pub fn with_truncated(mut self, truncated: bool) -> Self {
+        self.truncated = truncated;
+        self
+    }
+
+    pub(crate) fn finish(mut self, request: &FilePickRequest) -> Self {
+        self.truncated |= self.files.len() > request.limit.max(1) as usize;
+        self.files = finish_files(request, self.files);
+        self
+    }
+}
+
+/// A document pick's selection or a failure that prevented the pick.
+pub type FilePickResult = Result<FilePickSelection, FilePickError>;
+
+/// The result a document pick resolves with.
+pub type FilePickFuture = Pin<Box<dyn Future<Output = FilePickResult> + Send>>;
+
 /// Answers the app's picks in place of the platform's picker: an embedding
 /// app's own picker, or a test's files.
 pub trait PickerBackend: Send + Sync {
@@ -449,12 +525,12 @@ pub trait PickerBackend: Send + Sync {
     /// ([`PickedFile::fill_in`]).
     fn pick_images(&self, request: PickRequest) -> PickFuture;
 
-    /// The files the user picked for `request` (none when cancelled); the
-    /// core truncates what goes past the request's limit. A backend that
-    /// picks no files cancels: the platform's picker is still not shown.
-    fn pick_files(&self, request: FilePickRequest) -> PickFuture {
+    /// The selection or a failure for `request`. The core truncates a
+    /// selection past the request's limit and records that in the result.
+    /// An empty selection cancels without showing the platform's picker.
+    fn pick_files(&self, request: FilePickRequest) -> FilePickFuture {
         let _ = request;
-        Box::pin(std::future::ready(Vec::new()))
+        Box::pin(std::future::ready(Ok(FilePickSelection::default())))
     }
 }
 
@@ -581,7 +657,7 @@ pub fn read_files(paths: &[std::path::PathBuf], request: &PickRequest) -> Vec<Pi
 }
 
 /// The files at `paths` for a pick of files, read as they are, at most the
-/// request's limit; those that cannot be read are left out and logged, and
+/// request's limit; those that cannot be read answer with their names, and
 /// those larger than the request reads ([`FilePickRequest::size_limit`])
 /// are not read: they answer with their names and sizes
 /// ([`PickedStatus::TooLarge`]).
@@ -589,8 +665,9 @@ pub fn read_files(paths: &[std::path::PathBuf], request: &PickRequest) -> Vec<Pi
 pub fn read_picked_files(
     paths: &[std::path::PathBuf],
     request: &FilePickRequest,
-) -> Vec<PickedFile> {
-    read_paths(paths, request, request.size_limit())
+) -> FilePickSelection {
+    FilePickSelection::new(read_paths(paths, request, request.size_limit()))
+        .with_truncated(paths.len() > request.limit.max(1) as usize)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -602,11 +679,17 @@ fn read_paths(
     let files = paths
         .iter()
         .take(request.limit.max(1) as usize)
-        .filter_map(|path| {
-            let metadata = std::fs::metadata(path)
-                .inspect_err(|e| log::warn!("cannot read the picked {}: {e}", path.display()))
-                .ok()?;
-            let name = path.file_name()?.to_string_lossy().into_owned();
+        .map(|path| {
+            let name = path
+                .file_name()
+                .map_or_else(|| "file".into(), |name| name.to_string_lossy().into_owned());
+            let metadata = match std::fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    log::warn!("cannot read the picked {}: {error}", path.display());
+                    return PickedFile::unreadable(name);
+                }
+            };
             if metadata.len() > max_bytes {
                 log::warn!(
                     "the picked {} is not read: larger than {max_bytes} bytes",
@@ -614,17 +697,21 @@ fn read_paths(
                 );
                 let mut file = PickedFile::too_large(name, "", metadata.len());
                 file.last_modified = metadata.modified().ok();
-                return Some(file);
+                return file;
             }
-            let bytes = std::fs::read(path)
-                .inspect_err(|e| log::warn!("cannot read the picked {}: {e}", path.display()))
-                .ok()?;
-            Some(PickedFile {
+            let bytes = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    log::warn!("cannot read the picked {}: {error}", path.display());
+                    return PickedFile::unreadable(name);
+                }
+            };
+            PickedFile {
                 name,
                 data: ImageData::new(bytes),
                 last_modified: metadata.modified().ok(),
                 ..PickedFile::default()
-            })
+            }
         })
         .collect();
     finish_files(request, files)
@@ -708,7 +795,7 @@ mod tests {
         let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
         assert_eq!(
             picked.as_mut().poll(&mut cx),
-            std::task::Poll::Ready(Vec::new())
+            std::task::Poll::Ready(Ok(FilePickSelection::default()))
         );
     }
 
@@ -783,6 +870,7 @@ mod tests {
                     32,
                     PickedStatus::TooLarge
                 ),
+                ("missing.txt", "text/plain", 0, 0, PickedStatus::Unreadable),
             ]
         );
         assert!(files[0].last_modified.is_some());
@@ -792,6 +880,40 @@ mod tests {
 
     /// A directory of its own for test `name`, removed when dropped.
     struct TempDir(std::path::PathBuf);
+
+    #[test]
+    fn unreadable_documents_keep_their_names_in_a_mixed_selection() {
+        let dir = TempDir::new("picked-unreadable");
+        let readable = dir.0.join("readable.txt");
+        std::fs::write(&readable, b"hello").unwrap();
+        let missing = dir.0.join("unreadable.txt");
+        let selection = read_picked_files(&[readable, missing], &FilePickRequest::new(true, 2));
+        let files = selection.files;
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>(),
+            ["readable.txt", "unreadable.txt"]
+        );
+        assert_eq!(files[1].status, PickedStatus::Unreadable);
+        assert!(files[1].data.is_empty());
+        assert!(!selection.truncated);
+    }
+
+    #[test]
+    fn document_selection_reports_files_past_the_requested_count() {
+        let request = FilePickRequest::new(true, 2);
+        let selection = FilePickSelection::new(vec![PickedFile::default(); 3]).finish(&request);
+        assert_eq!(selection.files.len(), 2);
+        assert!(selection.truncated);
+        let selection = read_picked_files(
+            &["one".into(), "two".into(), "three".into()],
+            &request,
+        );
+        assert_eq!(selection.files.len(), 2);
+        assert!(selection.truncated);
+    }
 
     impl TempDir {
         fn new(name: &str) -> Self {
@@ -816,7 +938,7 @@ mod tests {
         std::fs::write(&video, [0; 64]).unwrap();
         let request = FilePickRequest::new(true, 0).max_size(16);
         assert_eq!(request.size_limit(), 16);
-        let files = read_picked_files(&[small, video], &request);
+        let files = read_picked_files(&[small, video], &request).files;
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].status, PickedStatus::Read);
         assert_eq!((files[0].data.len(), files[0].len), (5, 5));
@@ -840,7 +962,7 @@ mod tests {
         drop(file);
         let request = FilePickRequest::default();
         assert_eq!(request.size_limit(), MAX_PICKED_FILE_BYTES);
-        let files = read_picked_files(&[path], &request);
+        let files = read_picked_files(&[path], &request).files;
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].status, PickedStatus::TooLarge);
         assert_eq!(files[0].name, "huge.bin");

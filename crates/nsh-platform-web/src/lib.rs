@@ -1366,6 +1366,54 @@ pub extern "C" fn nsh_picked(request: u32) -> f64 {
     })
 }
 
+/// Records the name of a file that could not be read. [`nsh_files_picked`]
+/// sends it with the other documents.
+///
+/// # Safety
+///
+/// The name range is memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_picked_unreadable(name: *const u8, name_len: usize) {
+    // SAFETY: guaranteed by the caller.
+    let name = unsafe { string(name, name_len) };
+    PICKED.with_borrow_mut(|files| files.push(nsh_core::picker::PickedFile::unreadable(name)));
+}
+
+/// Answers document pick `request`, including whether the selection ran
+/// past the requested count. A nonempty failure is a dialog error.
+///
+/// # Safety
+///
+/// The failure range is memory from [`nsh_alloc`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nsh_files_picked(
+    request: u32,
+    truncated: u32,
+    failure: *const u8,
+    failure_len: usize,
+) -> f64 {
+    use nsh_core::picker::{FilePickError, FilePickSelection};
+
+    // SAFETY: guaranteed by the caller.
+    let failure = unsafe { string(failure, failure_len) };
+    let files = PICKED.with_borrow_mut(std::mem::take);
+    let result = if failure.is_empty() {
+        Ok(FilePickSelection::new(files).with_truncated(truncated != 0))
+    } else {
+        Err(FilePickError::Dialog(failure))
+    };
+    send(|app| {
+        app.control.dispatch_event(
+            ROOT_ID,
+            EventKind::Pick,
+            EventPayload::FilesPicked {
+                id: request,
+                result,
+            },
+        )
+    })
+}
+
 /// The status of an offscreen canvas render's answer ([`nsh_canvas_image`];
 /// `nsh.js` `CANVAS_IMAGE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

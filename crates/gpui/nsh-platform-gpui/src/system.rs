@@ -1423,7 +1423,8 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
     match command {
         Command::Dialog(dialog) => show_dialog(surface, dialog),
         // GPUI's clipboard items hold no HTML: the text only.
-        Command::SetClipboard(text) | Command::SetClipboardItem(nsh_core::element::ClipboardItem { text, .. }) => {
+        Command::SetClipboard(text)
+        | Command::SetClipboardItem(nsh_core::element::ClipboardItem { text, .. }) => {
             let text = text.clone();
             crate::rt::on_app(move |cx| {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
@@ -1605,23 +1606,39 @@ fn pick_files(surface: &Rc<Surface>, id: u32, request: nsh_core::picker::FilePic
             prompt: None,
         });
         cx.spawn(async move |_| {
-            let paths: Vec<_> = paths
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .flatten()
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|p| nsh_core::file_dialog::passes(&request.filters, p))
-                .collect();
-            std::thread::spawn(move || {
-                let files = nsh_core::picker::read_picked_files(&paths, &request);
+            use nsh_core::picker::{FilePickError, read_picked_files};
+
+            let answer = move |control: &nsh_engine::EngineControl, result| {
                 control.dispatch_event(
                     ROOT_ID,
                     EventKind::Pick,
-                    EventPayload::Picked { id, files },
+                    EventPayload::FilesPicked { id, result },
                 );
-            });
+            };
+            let paths: Vec<_> = match paths.await {
+                Ok(Ok(paths)) => paths.unwrap_or_default(),
+                Ok(Err(error)) => {
+                    answer(&control, Err(FilePickError::Dialog(error.to_string())));
+                    return;
+                }
+                Err(error) => {
+                    answer(&control, Err(FilePickError::Dialog(error.to_string())));
+                    return;
+                }
+            }
+            .into_iter()
+            .filter(|path| nsh_core::file_dialog::passes(&request.filters, path))
+            .collect();
+            let reader = control.clone();
+            if let Err(error) =
+                std::thread::Builder::new()
+                    .name("nsh-picker".into())
+                    .spawn(move || {
+                        answer(&reader, Ok(read_picked_files(&paths, &request)));
+                    })
+            {
+                answer(&control, Err(FilePickError::Dialog(error.to_string())));
+            }
         })
         .detach();
     });

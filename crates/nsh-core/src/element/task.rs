@@ -93,7 +93,7 @@ pub(crate) enum Action {
     /// (none when cancelled) resolve the slot.
     PickFiles(
         crate::picker::FilePickRequest,
-        AnswerSlot<Vec<crate::picker::PickedFile>>,
+        AnswerSlot<crate::picker::FilePickResult>,
     ),
     /// Calls function `name` of the embedding app (`nsh/host`); its
     /// value, or why it failed, resolves the slot.

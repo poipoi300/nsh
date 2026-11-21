@@ -124,16 +124,43 @@ pub(crate) fn pick_files(
     let window = crate::window::key_window(surface);
     let request = request.clone();
     glib::spawn_future_local(async move {
-        let paths = pick_paths(&request.dialog(), window)
-            .await
-            .unwrap_or_else(|e| {
-                log::warn!("the file dialog failed: {e}");
-                Vec::new()
-            });
-        std::thread::spawn(move || {
-            let files = nsh_core::picker::read_picked_files(&paths, &request);
-            control.dispatch_event(ROOT_ID, EventKind::Pick, EventPayload::Picked { id, files });
-        });
+        use nsh_core::picker::{FilePickError, read_picked_files};
+
+        let paths = match pick_paths(&request.dialog(), window).await {
+            Ok(paths) => paths,
+            Err(error) => {
+                control.dispatch_event(
+                    ROOT_ID,
+                    EventKind::Pick,
+                    EventPayload::FilesPicked {
+                        id,
+                        result: Err(FilePickError::Dialog(error.to_string())),
+                    },
+                );
+                return;
+            }
+        };
+        let reader = control.clone();
+        if let Err(error) = std::thread::Builder::new()
+            .name("nsh-picker".into())
+            .spawn(move || {
+                let result = Ok(read_picked_files(&paths, &request));
+                reader.dispatch_event(
+                    ROOT_ID,
+                    EventKind::Pick,
+                    EventPayload::FilesPicked { id, result },
+                );
+            })
+        {
+            control.dispatch_event(
+                ROOT_ID,
+                EventKind::Pick,
+                EventPayload::FilesPicked {
+                    id,
+                    result: Err(FilePickError::Dialog(error.to_string())),
+                },
+            );
+        }
     });
 }
 
