@@ -60,7 +60,8 @@ pub(crate) struct Java {
 static JAVA: OnceLock<Java> = OnceLock::new();
 
 /// The process Java VM, available after NSH's JNI setup completes.
-/// Native threads can attach to it to call Java APIs.
+/// Native threads can attach to it to call Java APIs. Threads attached from native code see the
+/// system class loader: framework classes resolve, the app's own classes do not.
 pub fn java_vm() -> Option<JavaVM> {
     let vm = &JAVA.get()?.vm;
     // SAFETY: JNI_OnLoad supplied this process VM. A JavaVM handle does not destroy it on drop.

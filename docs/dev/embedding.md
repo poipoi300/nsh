@@ -73,6 +73,11 @@
   `EngineConfig::runtime`, per view; `None` keeps the process-wide shared runtime. Both are read each time an engine
   starts, so a change applies from the next load and a running engine keeps its runtime. NSH only clones the handle;
   the app owns the runtime. The engine's `runtime` tests cover it (`nsh-engine/tests/engine/runtime.rs`).
+- **The process Java VM (Rust-linked Android hosts)**: `nsh::java_vm()` (`nsh-platform-android/src/java.rs`) returns the
+  `JavaVM` that `JNI_OnLoad` received, or `None` before NSH's JNI setup has completed. App code that calls Java APIs
+  from Rust (for example the Android Keystore, below API 31 where the NDK's `JNI_GetCreatedJavaVMs` is unavailable)
+  attaches its threads to it. Threads attached from native code see the system class loader: framework classes
+  resolve, the app's own classes do not.
 - **Native components** (`nsh`'s `nativeComponent`; `component.rs`, `ComponentBox.java`): the embedding app registers its own native
   views by name — Swift `NshAppView.register(component:) { context in … }` (`NshComponent`: `view`, `setProp`,
   `command`), Java `NshView.registerComponent(name, factory)` (`NshComponent`), Rust `AppView::register_component`
